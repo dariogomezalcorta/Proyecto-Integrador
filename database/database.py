@@ -2,11 +2,11 @@ import psycopg2
 
 def connect_db():
     return psycopg2.connect(
-        host="200.115.220.122",  # Cambia esto a la IP de tu servidor remoto
-        database="nombre_de_la_base_de_datos",
-        user="tu_usuario",
-        password="tu_contraseña",
-        port=5432  # Asegúrate de especificar el puerto si es necesario (5432 es el predeterminado)
+        host="localhost",  #"200.115.220.122"
+        database="Precios_Claros",
+        user="postgres",
+        password=".Pikachu12345.",
+        port=5432
     )
 
 def setup_database():
