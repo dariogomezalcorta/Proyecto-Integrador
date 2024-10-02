@@ -2,7 +2,7 @@ import psycopg2
 
 def connect_db():
     return psycopg2.connect(
-        host="192.168.0.154",
+        host="localhost", # "192.168.0.154",
         database="PreciosClaros",
         user="postgres",
         password=".Pikachu12345.",
@@ -28,14 +28,20 @@ def setup_database():
 def insert_product(nombre, precio_min, precio_max):
     conn = connect_db()
     cur = conn.cursor()
-    # Insertar sin manejar conflictos
+
+    # Convertir comas a puntos en los precios antes de la inserción
+    precio_min = precio_min.replace(",", ".")
+    precio_max = precio_max.replace(",", ".")
+
     cur.execute("""
         INSERT INTO productos (nombre, precio_min, precio_max)
         VALUES (%s, %s, %s);
     """, (nombre, precio_min, precio_max))
+    
     conn.commit()
     cur.close()
     conn.close()
+
 
 def clear_table():
     conn = connect_db()
