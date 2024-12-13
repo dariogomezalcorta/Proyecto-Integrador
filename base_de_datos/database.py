@@ -1,52 +1,76 @@
-import psycopg2
+from sqlalchemy import create_engine, text
+from urllib.parse import quote_plus
 
-def connect_db():
-    return psycopg2.connect(
-        host="localhost", # "192.168.0.154",
-        database="PreciosClaros",
-        user="postgres",
-        password=".Pikachu12345.",
-        port=5432
-    )
+def connect_db_precios():
+    password = quote_plus(".Pikachu12345.")  # Escapar caracteres especiales
+    connection_string = f"postgresql://postgres:{password}@localhost:5432/PreciosClaros"
+    engine = create_engine(connection_string)
+    return engine
 
-def setup_database():
-    conn = connect_db()
-    cur = conn.cursor()
-    # Crear tabla si no existe
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS productos (
-            id SERIAL PRIMARY KEY,
-            nombre VARCHAR(255) UNIQUE,
-            precio_min NUMERIC,
-            precio_max NUMERIC
-        )
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+def connect_db_recetas():
+    password = quote_plus(".Pikachu12345.")  # Escapar caracteres especiales
+    connection_string = f"postgresql://postgres:{password}@localhost:5432/Recetas_Cocineros"
+    engine = create_engine(connection_string)
+    return engine
+
+# --- Funciones para la base de datos de PreciosClaros ---
+
+def setup_database_precios():
+    engine = connect_db_precios()
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS productos (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(255) UNIQUE,
+                precio_min NUMERIC,
+                precio_max NUMERIC
+            )
+        """))
+        conn.commit()
 
 def insert_product(nombre, precio_min, precio_max):
-    conn = connect_db()
-    cur = conn.cursor()
+    engine = connect_db_precios()
+    with engine.connect() as conn:
+        conn.execute(text("""
+            INSERT INTO productos (nombre, precio_min, precio_max)
+            VALUES (:nombre, :precio_min, :precio_max)
+            ON CONFLICT (nombre) DO NOTHING
+        """), {"nombre": nombre, "precio_min": precio_min, "precio_max": precio_max})
+        conn.commit()
 
-    # Convertir comas a puntos en los precios antes de la inserción
-    precio_min = precio_min.replace(",", ".")
-    precio_max = precio_max.replace(",", ".")
+def clear_table_precios():
+    engine = connect_db_precios()
+    with engine.connect() as conn:
+        conn.execute(text("DELETE FROM productos"))
+        conn.commit()
 
-    cur.execute("""
-        INSERT INTO productos (nombre, precio_min, precio_max)
-        VALUES (%s, %s, %s);
-    """, (nombre, precio_min, precio_max))
-    
-    conn.commit()
-    cur.close()
-    conn.close()
+# --- Funciones para la base de datos de Recetas_Cocineros ---
 
+def setup_database_recetas():
+    engine = connect_db_recetas()
+    with engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS recetas (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(255) UNIQUE,
+                ingredientes TEXT,
+                procedimiento TEXT
+            )
+        """))
+        conn.commit()
 
-def clear_table():
-    conn = connect_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM productos;")
-    conn.commit()
-    cur.close()
-    conn.close()
+def insert_receta(nombre, ingredientes, procedimiento):
+    engine = connect_db_recetas()
+    with engine.connect() as conn:
+        conn.execute(text("""
+            INSERT INTO recetas (nombre, ingredientes, procedimiento)
+            VALUES (:nombre, :ingredientes, :procedimiento)
+            ON CONFLICT (nombre) DO NOTHING
+        """), {"nombre": nombre, "ingredientes": ingredientes, "procedimiento": procedimiento})
+        conn.commit()
+
+def clear_recetas_table():
+    engine = connect_db_recetas()
+    with engine.connect() as conn:
+        conn.execute(text("DELETE FROM recetas"))
+        conn.commit()
