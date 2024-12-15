@@ -11,6 +11,31 @@ import json
 import re
 from Levenshtein import distance as levenshtein_distance
 import time
+import sys
+
+print(f"Directorio actual: {os.getcwd()}")
+
+# Opcionalidad para cargar desde archivos o base de datos
+USE_DATABASE = False  # Cambia esto según tus necesidades
+
+import sys
+
+# Redirigir todas las salidas estándar a log_resultados.txt
+class Logger:
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log_file = open(filename, "a", encoding="utf-8")
+
+    def write(self, message):
+        self.terminal.write(message)  # Escribe en la consola
+        self.log_file.write(message)  # Escribe en el archivo de log
+
+    def flush(self):
+        self.terminal.flush()
+        self.log_file.flush()
+
+# Redirigir la salida estándar
+sys.stdout = Logger("log_resultados.txt")
 
 def medir_tiempo(func):
     def wrapper(*args, **kwargs):
@@ -108,6 +133,10 @@ def limpiar_descripciones(ingrediente):
 
     return ingrediente
 
+def validar_ingrediente(ingrediente):
+    # Ingredientes con menos de 3 caracteres o solo números son irrelevantes
+    return len(ingrediente) > 2 and not ingrediente.isnumeric()
+
 # Función para limpiar y normalizar los ingredientes
 def limpiar_ingredientes(ingredientes):
     ingredientes_limpios = []
@@ -144,15 +173,57 @@ def extraer_cantidad_unidad(ingrediente):
 def get_batch_embeddings(texts, batch_size=64):
     if isinstance(texts, str):
         texts = [texts]
+
     embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i:i + batch_size]
-        inputs = tokenizer(batch_texts, return_tensors="pt", padding=True, truncation=True)
-        with torch.no_grad():
-            outputs = model(**inputs)
-        batch_embeddings = outputs.last_hidden_state.mean(dim=1).cpu().numpy()
-        embeddings.extend(batch_embeddings)
-    return embeddings[0] if len(embeddings) == 1 else np.array(embeddings)
+    try:
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i + batch_size]
+            
+            # Depuración: Mostrar información del lote actual
+            print(f"\nProcesando lote {i // batch_size + 1}/{-(-len(texts) // batch_size)}")
+            print(f"Textos en el lote: {batch_texts}")
+
+            # Tokenización y generación de embeddings
+            inputs = tokenizer(batch_texts, return_tensors="pt", padding=True, truncation=True)
+            with torch.no_grad():
+                outputs = model(**inputs)
+            batch_embeddings = outputs.last_hidden_state.mean(dim=1).cpu().numpy()
+
+            # Depuración: Confirmar forma del lote actual de embeddings
+            print(f"Forma de embeddings generados para este lote: {batch_embeddings.shape}")
+
+            # Añadir embeddings del lote a la lista principal
+            embeddings.extend(batch_embeddings)
+
+    except Exception as e:
+        print(f"Error durante la generación de embeddings: {e}")
+        raise
+
+    # Depuración: Confirmar que el número de embeddings generados coincide con los textos procesados
+    print(f"\nNúmero total de textos procesados: {len(texts)}")
+    print(f"Número total de embeddings generados: {len(embeddings)}")
+
+    if len(embeddings) != len(texts):
+        print("Advertencia: El número de embeddings generados no coincide con el número de textos procesados.")
+
+    # Determinar si retornar un único embedding o una lista de embeddings
+    if len(embeddings) == 1:
+        print(f"Retornando un único embedding con forma: {embeddings[0].shape}")
+        return embeddings[0]
+    else:
+        print(f"Retornando array de embeddings con forma: {np.array(embeddings).shape}")
+        return np.array(embeddings)
+
+
+def validar_productos_df(productos_df):
+    columnas_esperadas = {"nombre", "precio_min"}
+    if not columnas_esperadas.issubset(productos_df.columns):
+        raise ValueError(f"El archivo de productos no tiene las columnas requeridas: {columnas_esperadas}")
+
+def validar_recetas_df(recetas_df):
+    columnas_esperadas = {"nombre", "ingredientes"}
+    if not columnas_esperadas.issubset(recetas_df.columns):
+        raise ValueError(f"El archivo de recetas no tiene las columnas requeridas: {columnas_esperadas}")
 
 # Conexión a la base de datos
 def connect_db_precios():
@@ -161,56 +232,162 @@ def connect_db_precios():
 def connect_db_recetas():
     return create_engine('postgresql://postgres:.Pikachu12345.@localhost:5432/Recetas_Cocineros')
 
-# Cargar datos de productos y calcular o cargar embeddings
 def cargar_datos_productos():
-    engine = connect_db_precios()
-    query = "SELECT nombre, precio_min FROM productos LIMIT 50"
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text(query)).mappings()
-            productos = [dict(row) for row in result]
-            productos_df = pd.DataFrame(productos)
-    except Exception as e:
-        print(f"Error al cargar datos de productos: {e}")
-        productos_df = pd.DataFrame()
-    finally:
-        engine.dispose()
+    if USE_DATABASE:
+        # Lógica existente para cargar desde PostgreSQL
+        engine = connect_db_precios()
+        query = "SELECT nombre, precio_min FROM productos LIMIT 50"
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(query)).mappings()
+                productos = [dict(row) for row in result]
+                productos_df = pd.DataFrame(productos)
+        except Exception as e:
+            print(f"Error al cargar datos de productos: {e}")
+            productos_df = pd.DataFrame()
+        finally:
+            engine.dispose()
+    else:
+        # Leer desde archivo CSV
+        try:
+            productos_df = pd.read_csv("PreciosClaros.csv")
+        except FileNotFoundError:
+            print("Archivo PreciosClaros.csv no encontrado.")
+            productos_df = pd.DataFrame()
 
-    # Ruta de archivo para guardar/cargar embeddings
-    embeddings_file = "productos_embeddings.npy"
+    # Eliminar duplicados
+    productos_df = productos_df.drop_duplicates(subset='nombre')
+    # Eliminar filas con valores nulos
+    productos_df = productos_df.dropna(subset=['nombre', 'precio_min'])
+    # Confirmar si hay filas tras limpieza
+    print(f"Productos después de limpieza: {len(productos_df)}")
 
-    # Calculamos los embeddings solo si productos_df no está vacío
     if not productos_df.empty:
-        print("Calculando embeddings para productos...")
-        productos_df['nombre_limpio'] = productos_df['nombre'].str.lower()
+        # Validar columnas del DataFrame
+        validar_productos_df(productos_df)
 
-        # Cargar embeddings desde archivo si existe
-        if os.path.exists(embeddings_file):
-            print("Cargando embeddings de productos desde archivo...")
-            productos_df['embedding'] = [np.array(embedding) for embedding in np.load(embeddings_file, allow_pickle=True)]
-        else:
-            print("Calculando embeddings para productos...")
-            # Calcular los embeddings y asignar cada embedding a cada producto
-            embeddings = get_batch_embeddings(productos_df['nombre_limpio'].tolist())
-            productos_df['embedding'] = [embedding for embedding in embeddings]  # Asignación correcta
-            np.save(embeddings_file, embeddings)  # Guardar los embeddings en el archivo
+        # Limpiar nombres y añadir columna para cálculos posteriores
+        productos_df['nombre_limpio'] = productos_df['nombre'].apply(limpiar_descripciones)
+
+        # Precalcular o cargar embeddings
+        productos_df = precalcular_embeddings_productos(productos_df)
+
+        # Depuración: Verificar estructura del DataFrame y embeddings
+        print(productos_df.head())
+        if 'embedding' in productos_df.columns:
+            print(f"Primeros embeddings: {productos_df['embedding'].head()}")
+            print(f"Forma del primer embedding: {productos_df['embedding'].iloc[0].shape if not productos_df.empty else 'Sin datos'}")
+
+    if productos_df.empty:
+        print("Error: No se cargaron datos de productos. Verifica el archivo CSV.")
+    else:
+        print(f"Productos cargados: {len(productos_df)}")
+        print(productos_df.head())  # Muestra las primeras filas del DataFrame
+        print(productos_df.info())  # Información sobre columnas y tipos de datos
+
+    return productos_df
+
+def precalcular_embeddings_productos(productos_df, embeddings_file="productos_embeddings.npy"):
+    if not productos_df.empty and not os.path.exists(embeddings_file):
+        print("Embeddings no encontrados. Iniciando cálculo...")
+        
+        # Depuración: Validar productos para embeddings
+        print(f"Primeros productos para embeddings: {productos_df['nombre_limpio'].head()}")
+
+        try:
+            # Generar embeddings
+            productos_df['embedding'] = get_batch_embeddings(productos_df['nombre_limpio'].tolist())
+
+            # Debug: Verificar los embeddings generados
+            print(f"Primeros embeddings generados: {productos_df['embedding'].head()}")
+            print(f"Forma del primer embedding: {productos_df['embedding'].iloc[0].shape if len(productos_df) > 0 else 'Sin datos'}")
+
+            # Guardar los embeddings
+            np.save(embeddings_file, productos_df['embedding'].tolist())
+            print(f"Embeddings guardados correctamente en: {embeddings_file}")
+        except Exception as e:
+            print(f"Error al calcular o guardar embeddings: {e}")
+            raise
+    elif os.path.exists(embeddings_file):
+        print("Cargando embeddings desde archivo...")
+        try:
+            # Cargar embeddings desde archivo
+            embeddings = np.load(embeddings_file, allow_pickle=True)
+            print(f"Embeddings cargados correctamente. Total: {len(embeddings)}")
+
+            # Verificar que los embeddings cargados coincidan en número con los productos
+            if len(embeddings) != len(productos_df):
+                print(f"Error: Número de embeddings ({len(embeddings)}) no coincide con productos ({len(productos_df)}).")
+                print("Verifica si el archivo de embeddings está actualizado o si los productos han cambiado.")
+                raise ValueError("Número de embeddings inconsistente con el DataFrame de productos.")
+
+            # Asignar cada embedding como un vector 1D
+            productos_df['embedding'] = [np.array(emb) for emb in embeddings]
+
+            # Depuración: Validar que todos los embeddings son vectores 1D
+            for idx, emb in enumerate(productos_df['embedding']):
+                if emb.ndim != 1:
+                    print(f"Error: Embedding en la fila {idx} no es un vector 1D. Forma: {emb.shape}")
+                    raise ValueError(f"Embedding inconsistente detectado en el índice {idx}.")
+        except Exception as e:
+            print(f"Error al cargar o procesar los embeddings: {e}")
+            raise
+    else:
+        raise ValueError("No se encontraron embeddings precalculados ni se pudo calcular embeddings nuevos.")
+    
+    # Resumen final
+    print(f"Total de productos: {len(productos_df)}")
+    print(f"Total de embeddings procesados correctamente: {productos_df['embedding'].notnull().sum()}")
 
     return productos_df
 
 # Cargar datos de recetas
 def cargar_datos_recetas():
-    engine = connect_db_recetas()
-    query = "SELECT nombre, ingredientes FROM recetas WHERE nombre NOT ILIKE '%alfajor%' AND nombre NOT ILIKE '%torta%' LIMIT 10"
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text(query)).mappings()  # Usamos .mappings() para obtener un diccionario por fila
-            recetas = [dict(row) for row in result]
-            recetas_df = pd.DataFrame(recetas)
-    except Exception as e:
-        print(f"Error al cargar datos de recetas: {e}")
-        recetas_df = pd.DataFrame()  # Devuelve un DataFrame vacío en caso de error
-    finally:
-        engine.dispose()
+    if USE_DATABASE:
+        # Lógica existente para cargar desde PostgreSQL
+        engine = connect_db_recetas()
+        query = "SELECT nombre, ingredientes FROM recetas LIMIT 10"
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(query)).mappings()
+                recetas = [dict(row) for row in result]
+                recetas_df = pd.DataFrame(recetas)
+        except Exception as e:
+            print(f"Error al cargar datos de recetas: {e}")
+            recetas_df = pd.DataFrame()
+        finally:
+            engine.dispose()
+    else:
+        # Leer desde archivo JSON
+        try:
+            with open("recetas.json", "r", encoding="utf-8") as file:
+                recetas = json.load(file)
+                recetas_df = pd.DataFrame(recetas)
+        except FileNotFoundError:
+            print("Archivo recetas.json no encontrado.")
+            recetas_df = pd.DataFrame()
+
+    # Eliminar duplicados
+    recetas_df = recetas_df.drop_duplicates(subset='nombre')
+    # Eliminar filas con valores nulos
+    recetas_df = recetas_df.dropna(subset=['nombre', 'ingredientes'])
+    # Confirmar si hay filas tras limpieza
+    print(f"Recetas después de limpieza: {len(recetas_df)}")
+
+    if not recetas_df.empty:
+        # Validar columnas del DataFrame
+        validar_recetas_df(recetas_df)
+
+        # Limpiar los ingredientes irrelevantes antes de procesarlos
+        recetas_df['ingredientes'] = recetas_df['ingredientes'].apply(filtrar_no_ingredientes)
+
+    if recetas_df.empty:
+        print("Error: No se cargaron datos de recetas. Verifica el archivo JSON.")
+    else:
+        print(f"Recetas cargadas: {len(recetas_df)}")
+        print(recetas_df.head())  # Muestra las primeras filas del DataFrame
+        print(recetas_df.info())  # Información sobre columnas y tipos de datos
+
     return recetas_df
 
 # Configuración de pesos y cache de ingredientes
@@ -348,7 +525,7 @@ def obtener_palabras_clave(ingrediente):
 def filtrar_no_ingredientes(ingredientes):
     return '\n'.join(
         ing for ing in ingredientes.split('\n')
-        if not any(palabra.upper() in ing.upper() for palabra in ["INGREDIENTES", "PREPARACIÓN"])
+        if not any(irrelevante.lower() in ing.lower() for irrelevante in palabras_irrelevantes)
     )
 
 def buscar_productos_palabras_clave(palabra_clave, engine):
@@ -369,89 +546,152 @@ def buscar_productos_palabras_clave(palabra_clave, engine):
     return pd.DataFrame()  # Si no encuentra nada, retorna DataFrame vacío
 
 
-@medir_tiempo
 # Puntos de optimización
 @medir_tiempo
 def calcular_puntaje_producto(producto, palabras_clave, ingrediente_embedding):
     puntaje = 0
+
     for palabra in palabras_clave:
+        # Calcular similitud fuzzy entre las palabras clave y el nombre del producto
         similarity_fuzzy = fuzz.partial_ratio(palabra.lower(), producto['nombre'].lower()) / 100
         if similarity_fuzzy < MIN_PUNTAJE_FUZZY:
             continue
-        producto_embedding = get_batch_embeddings(producto['nombre'])
-        similarity_embedding = cosine_similarity(ingrediente_embedding.reshape(1, -1), producto_embedding.reshape(1, -1)).flatten()[0]
+
+        # Obtener el embedding del producto desde la columna de embeddings
+        producto_embedding = np.array(producto['embedding'])
+
+        # Asegurarse de que tanto el embedding del producto como el del ingrediente sean vectores 1D
+        if len(producto_embedding.shape) > 1:
+            producto_embedding = producto_embedding.flatten()
+        if len(ingrediente_embedding.shape) > 1:
+            ingrediente_embedding = ingrediente_embedding.flatten()
+
+        # Reshape para usar en cosine_similarity
+        producto_embedding_reshaped = producto_embedding.reshape(1, -1)
+        ingrediente_embedding_reshaped = ingrediente_embedding.reshape(1, -1)
+
+        # Calcular la similitud del embedding
+        similarity_embedding = cosine_similarity(ingrediente_embedding_reshaped, producto_embedding_reshaped).flatten()[0]
+
+        # Combinar las similitudes usando los pesos definidos
         puntaje += PESO_FUZZY * similarity_fuzzy + PESO_EMBEDDING * similarity_embedding
+
     return puntaje
 
 # Ingredientes que no necesitan cálculo de costo
 INGREDIENTES_EXCLUIDOS = {"agua", "sal", "pimienta"}
 
-# Mejora en emparejar_ingredientes para manejo de caché
 @medir_tiempo
 def emparejar_ingredientes(ingredientes, productos_df):
+    # Validar que el DataFrame no esté vacío y tenga las columnas esperadas
+    if productos_df.empty:
+        raise ValueError("El DataFrame de productos está vacío. Verifica el archivo CSV o la base de datos.")
+    
+    columnas_esperadas = {"nombre", "precio_min"}
+    if not columnas_esperadas.issubset(productos_df.columns):
+        raise ValueError(f"El DataFrame de productos no tiene las columnas requeridas: {columnas_esperadas}")
+
+    # Inspección inicial del DataFrame
+    print(f"Total de productos en DataFrame: {len(productos_df)}")
+    print(f"Columnas del DataFrame: {productos_df.columns.tolist()}")
+    if 'embedding' in productos_df.columns:
+        print(f"Primer embedding (si existe): {productos_df['embedding'].iloc[0] if not productos_df.empty else 'Sin datos'}")
+    else:
+        print("Advertencia: El DataFrame de productos no contiene la columna 'embedding'.")
+
+    # Validar que los ingredientes no estén vacíos
+    if not ingredientes.strip():
+        raise ValueError("La lista de ingredientes está vacía o no es válida.")
+
+    # Continuar con el procesamiento después de las validaciones
     costo_total = 0
-    ingredientes_faltantes = []  # Aquí almacenamos los faltantes
+    ingredientes_faltantes = []
     ingredientes_encontrados = 0
-    ingredientes_lista = ingredientes.split('\n')
-    engine = connect_db_precios()
+
+    ingredientes_lista = [
+        ing for ing in ingredientes.split('\n')
+        if ing.strip() and validar_ingrediente(limpiar_descripciones(ing))
+    ]
+    if USE_DATABASE:
+        engine = connect_db_precios()
+    else:
+        engine = None
 
     for i, ingrediente in enumerate(ingredientes_lista):
         ingrediente_limpio, cantidad, unidad = extraer_cantidad_unidad(ingrediente)
 
-        # Ignorar ingredientes en la lista de excluidos
         if ingrediente_limpio in INGREDIENTES_EXCLUIDOS:
             print(f"Ignorando {ingrediente_limpio} por estar en la lista de excluidos.")
             continue
 
-        # Verificar en caché
         if ingrediente_limpio in ingredientes_cache:
             mejor_producto, precio_min = ingredientes_cache[ingrediente_limpio]
             print(f"Usando caché para {ingrediente_limpio} -> Producto: {mejor_producto['nombre']}, Costo: {precio_min}")
         else:
-            # Generar palabras clave y embeddings si no está en caché
             palabras_clave = obtener_palabras_clave(ingrediente_limpio)
             ingrediente_embedding = get_batch_embeddings(ingrediente_limpio)
+
+            # Verificación de embeddings
+            if ingrediente_embedding.ndim != 1:
+                print(f"Error: El embedding del ingrediente '{ingrediente_limpio}' no es un vector 1D.")
+                print(f"Forma del embedding: {ingrediente_embedding.shape}")
+                continue
             print(f"Procesando ingrediente {i + 1}/{len(ingredientes_lista)}: {ingrediente} con palabras clave: {palabras_clave}")
 
-            # Buscar productos en la base de datos con la palabra clave principal
             productos_filtrados = buscar_productos_palabras_clave(palabras_clave[0], engine)
-            if productos_filtrados.empty:
-                productos_filtrados = productos_df  # Usar productos de respaldo si no hay coincidencias
+            if productos_filtrados.empty and not USE_DATABASE:
+                print(f"Buscando en productos_df para {palabras_clave[0]}...")
+                productos_filtrados = productos_df[productos_df['nombre_limpio'].str.contains(palabras_clave[0], na=False, case=False)]
 
-            # Evaluar productos candidatos con umbral adaptativo
             umbral = obtener_umbral_ingrediente(ingrediente)
             productos_candidatos = []
             for _, row in productos_filtrados.iterrows():
+                producto_embedding = np.array(row['embedding'])
+                if producto_embedding.ndim != 1:
+                    print(f"Error: Embedding del producto '{row['nombre']}' no es un vector 1D.")
+                    print(f"Forma del embedding: {producto_embedding.shape}")
+                    continue
+
+                print(f"Evaluando producto: {row['nombre']}")
+                print(f"Embedding del producto (forma): {producto_embedding.shape}")
+                print(f"Embedding del ingrediente (forma): {ingrediente_embedding.shape}")
+
                 puntaje_producto = calcular_puntaje_producto(row, palabras_clave, ingrediente_embedding)
+                print(f"Puntaje calculado para producto '{row['nombre']}': {puntaje_producto}")
+
                 if puntaje_producto > umbral:
                     productos_candidatos.append((row, puntaje_producto))
 
-            # Seleccionar el producto más barato entre los candidatos
             if productos_candidatos:
                 producto_barato = min(productos_candidatos, key=lambda x: x[0]['precio_min'])[0]
                 precio_min = producto_barato['precio_min']
 
-                # Ajuste de precio por unidad
                 if unidad in conversiones:
                     precio_min = (precio_min / conversiones[unidad]) * cantidad
                 else:
-                    print(f"Advertencia: Unidad '{unidad}' no encontrada en conversiones. Usando precio sin ajuste.")
+                    print(f"Advertencia: Unidad '{unidad}' no encontrada. Usando cantidad como predeterminada.")
+                    precio_min *= cantidad
 
-                # Guardar en caché y actualizar el archivo
                 actualizar_cache_ingrediente(ingrediente_limpio, producto_barato, precio_min)
             else:
                 print(f"No se encontró coincidencia suficiente para el ingrediente: {ingrediente}")
-                ingredientes_faltantes.append(ingrediente)  # Añadir faltante
+                ingredientes_faltantes.append(ingrediente)
                 continue
 
         costo_total += precio_min
         ingredientes_encontrados += 1
 
-    # Log final de ingredientes faltantes
+    print(f"\nResumen de procesamiento:")
+    print(f"Ingredientes encontrados: {ingredientes_encontrados}/{len(ingredientes_lista)}")
+    print(f"Ingredientes faltantes: {len(ingredientes_faltantes)}")
+    
     if ingredientes_faltantes:
-        print("Ingredientes sin coincidencias:", ingredientes_faltantes)
+        with open("ingredientes_faltantes.log", "w") as log_file:
+            for faltante in ingredientes_faltantes:
+                log_file.write(f"{faltante}\n")
 
-    engine.dispose()
+    if engine:
+        engine.dispose()
     return costo_total, ingredientes_encontrados
 
 # Función para recomendar recetas en base al presupuesto
@@ -480,8 +720,13 @@ def recomendar_recetas(presupuesto_semanal, productos_df, recetas_df, max_receta
 # Función principal para generar recomendaciones
 def generar_recomendaciones(presupuesto_semanal):
     print("Generando recomendaciones...")
+    
+    # Cargar datos de recetas y productos
     recetas_df = cargar_datos_recetas()
+    validar_recetas_df(recetas_df)  # Validar recetas después de cargarlas
+    
     productos_df = cargar_datos_productos()
+    validar_productos_df(productos_df)  # Validar productos después de cargarlos
 
     if recetas_df.empty or productos_df.empty:
         print("No se encontraron datos suficientes para generar recomendaciones.")
@@ -499,5 +744,16 @@ def generar_recomendaciones(presupuesto_semanal):
                 
 # Ejecutar recomendaciones con un presupuesto dado
 if __name__ == "__main__":
-    presupuesto_semanal = 30000
+    presupuesto_semanal = 40000
     generar_recomendaciones(presupuesto_semanal)
+
+def verificar_embeddings():
+    try:
+        embeddings = np.load("productos_embeddings.npy", allow_pickle=True)
+        print(f"Número total de embeddings: {len(embeddings)}")
+        print(f"Forma del primer embedding (si existe): {embeddings[0].shape if len(embeddings) > 0 else 'No hay embeddings'}")
+    except Exception as e:
+        print(f"Error al cargar embeddings: {e}")
+
+# Llama esta función para inspeccionar
+verificar_embeddings()

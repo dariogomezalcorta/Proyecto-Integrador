@@ -4,7 +4,9 @@ from base_de_datos.database import (
     setup_database_recetas, insert_receta
 )
 from scraping.scraper import scrape_data, scrape_recetas  # Asegúrate de importar scrape_recetas
-#from modelos.recomendacion import cargar_datos_interacciones, crear_matriz_similitud_productos, recomendar_productos
+from modelos.recomendacion_transformer import cargar_datos_productos, cargar_datos_recetas, recomendar_recetas
+
+USE_DATABASE = False  # Cambiar a True si se quieren usar las bases de datos.
 
 def ejecutar_scraper_precios():
     try:
@@ -41,12 +43,25 @@ def ejecutar_scraper_recetas():
 def ejecutar_recomendacion():
     try:
         print("Generando recomendaciones...")
-        interacciones = cargar_datos_interacciones()
-        similitud_productos_df = crear_matriz_similitud_productos(interacciones)
-        
-        recomendaciones = recomendar_productos(101, similitud_productos_df, top_n=5)
-        print("Recomendaciones:\n", recomendaciones)
-    
+        productos_df = cargar_datos_productos()  # Ya incluye lógica para archivos y base de datos
+        recetas_df = cargar_datos_recetas()  # Ya incluye lógica para archivos y base de datos
+
+        if productos_df.empty or recetas_df.empty:
+            print("No se encontraron datos suficientes para generar recomendaciones.")
+            return
+
+        # Aquí puedes llamar a las funciones de recomendación existentes
+        presupuesto_semanal = 30000  # Este valor podría ser dinámico
+        recomendaciones, costo_total = recomendar_recetas(presupuesto_semanal, productos_df, recetas_df)
+
+        if recomendaciones:
+            print(f"\nRecomendaciones para un presupuesto semanal de {presupuesto_semanal}:")
+            for receta in recomendaciones:
+                print(f"- {receta['nombre']} (Costo: ${receta['costo']:.2f})")
+            print(f"Total estimado: ${costo_total:.2f}")
+        else:
+            print("No se encontraron suficientes recetas que se ajusten al presupuesto.")
+
     except Exception as e:
         print(f"Error durante la generación de recomendaciones: {str(e)}")
 
@@ -57,8 +72,11 @@ if __name__ == "__main__":
         elif sys.argv[1] == "scrape_recetas":
             ejecutar_scraper_recetas()
         elif sys.argv[1] == "recom":
+            if len(sys.argv) > 2 and sys.argv[2] == "db":
+                USE_DATABASE = True
             ejecutar_recomendacion()
         else:
-            print("Modo no reconocido. Usa 'scrape_precios', 'scrape_recetas' o 'recom'.")
+            print("Modo no reconocido. Usa 'scrape_precios', 'scrape_recetas' o 'recom [db|file]'.")
     else:
-        print("Por favor, especifica un modo. Usa 'scrape_precios', 'scrape_recetas' o 'recom'.")
+        print("Por favor, especifica un modo. Usa 'scrape_precios', 'scrape_recetas' o 'recom [db|file]'.")
+
