@@ -205,6 +205,7 @@ def get_batch_embeddings(texts, batch_size=64):
 
     if len(embeddings) != len(texts):
         print("Advertencia: El número de embeddings generados no coincide con el número de textos procesados.")
+        raise ValueError("Número inconsistente de embeddings generados.")
 
     # Determinar si retornar un único embedding o una lista de embeddings
     if len(embeddings) == 1:
@@ -214,10 +215,10 @@ def get_batch_embeddings(texts, batch_size=64):
         print(f"Retornando array de embeddings con forma: {np.array(embeddings).shape}")
         return np.array(embeddings)
 
-
 def validar_productos_df(productos_df):
     columnas_esperadas = {"nombre", "precio_min"}
     if not columnas_esperadas.issubset(productos_df.columns):
+        print(f"Columnas disponibles: {productos_df.columns.tolist()}")
         raise ValueError(f"El archivo de productos no tiene las columnas requeridas: {columnas_esperadas}")
 
 def validar_recetas_df(recetas_df):
@@ -255,42 +256,40 @@ def cargar_datos_productos():
             print("Archivo PreciosClaros.csv no encontrado.")
             productos_df = pd.DataFrame()
 
-    # Eliminar duplicados
+    print(f"Productos antes de limpiar: {len(productos_df)}")
     productos_df = productos_df.drop_duplicates(subset='nombre')
-    # Eliminar filas con valores nulos
     productos_df = productos_df.dropna(subset=['nombre', 'precio_min'])
-    # Confirmar si hay filas tras limpieza
-    print(f"Productos después de limpieza: {len(productos_df)}")
+    print(f"Productos tras limpiar duplicados y nulos: {len(productos_df)}")
 
     if not productos_df.empty:
-        # Validar columnas del DataFrame
-        validar_productos_df(productos_df)
-
-        # Limpiar nombres y añadir columna para cálculos posteriores
-        productos_df['nombre_limpio'] = productos_df['nombre'].apply(limpiar_descripciones)
+        # Generar columna `nombre_limpio`
+        try:
+            productos_df['nombre_limpio'] = productos_df['nombre'].apply(limpiar_descripciones)
+            # Validar contenido de `nombre_limpio`
+            print("Validación de `nombre_limpio`:")
+            print(productos_df['nombre_limpio'].head())
+            if productos_df['nombre_limpio'].isnull().any():
+                raise ValueError("Existen valores nulos en `nombre_limpio`.")
+        except Exception as e:
+            print(f"Error al generar o validar `nombre_limpio`: {e}")
+            return pd.DataFrame()  # Retornar DataFrame vacío si falla
 
         # Precalcular o cargar embeddings
         productos_df = precalcular_embeddings_productos(productos_df)
 
-        # Depuración: Verificar estructura del DataFrame y embeddings
-        print(productos_df.head())
-        if 'embedding' in productos_df.columns:
-            print(f"Primeros embeddings: {productos_df['embedding'].head()}")
-            print(f"Forma del primer embedding: {productos_df['embedding'].iloc[0].shape if not productos_df.empty else 'Sin datos'}")
+        print(f"Primeros registros tras calcular embeddings: {productos_df.head()}")
 
     if productos_df.empty:
         print("Error: No se cargaron datos de productos. Verifica el archivo CSV.")
     else:
-        print(f"Productos cargados: {len(productos_df)}")
-        print(productos_df.head())  # Muestra las primeras filas del DataFrame
-        print(productos_df.info())  # Información sobre columnas y tipos de datos
+        print(f"Productos cargados correctamente: {len(productos_df)}")
 
     return productos_df
 
 def precalcular_embeddings_productos(productos_df, embeddings_file="productos_embeddings.npy"):
     if not productos_df.empty and not os.path.exists(embeddings_file):
         print("Embeddings no encontrados. Iniciando cálculo...")
-        
+
         # Depuración: Validar productos para embeddings
         print(f"Primeros productos para embeddings: {productos_df['nombre_limpio'].head()}")
 
@@ -303,8 +302,15 @@ def precalcular_embeddings_productos(productos_df, embeddings_file="productos_em
             print(f"Forma del primer embedding: {productos_df['embedding'].iloc[0].shape if len(productos_df) > 0 else 'Sin datos'}")
 
             # Guardar los embeddings
+            print(f"Guardando embeddings en {embeddings_file}...")
             np.save(embeddings_file, productos_df['embedding'].tolist())
             print(f"Embeddings guardados correctamente en: {embeddings_file}")
+
+            # Depuración: Confirmar que el archivo se creó
+            if os.path.exists(embeddings_file):
+                print(f"Archivo {embeddings_file} creado correctamente.")
+            else:
+                print(f"Error: No se pudo crear el archivo {embeddings_file}. Revisa permisos de escritura.")
         except Exception as e:
             print(f"Error al calcular o guardar embeddings: {e}")
             raise
@@ -747,13 +753,17 @@ if __name__ == "__main__":
     presupuesto_semanal = 40000
     generar_recomendaciones(presupuesto_semanal)
 
-def verificar_embeddings():
+def verificar_embeddings(embeddings_file="productos_embeddings.npy"):
     try:
-        embeddings = np.load("productos_embeddings.npy", allow_pickle=True)
-        print(f"Número total de embeddings: {len(embeddings)}")
-        print(f"Forma del primer embedding (si existe): {embeddings[0].shape if len(embeddings) > 0 else 'No hay embeddings'}")
+        if os.path.exists(embeddings_file):
+            embeddings = np.load(embeddings_file, allow_pickle=True)
+            print(f"Archivo {embeddings_file} encontrado.")
+            print(f"Número total de embeddings: {len(embeddings)}")
+            print(f"Forma del primer embedding (si existe): {embeddings[0].shape if len(embeddings) > 0 else 'No hay embeddings'}")
+        else:
+            print(f"Archivo {embeddings_file} no encontrado. Verifica si fue generado correctamente.")
     except Exception as e:
-        print(f"Error al cargar embeddings: {e}")
+        print(f"Error al cargar embeddings desde {embeddings_file}: {e}")
 
 # Llama esta función para inspeccionar
 verificar_embeddings()

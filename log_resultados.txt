@@ -334,9 +334,17 @@ Forma de embeddings generados para este lote: (1, 384)
 Número total de textos procesados: 1
 Número total de embeddings generados: 1
 Retornando un único embedding con forma: (384,)
-Error al cargar embeddings: [Errno 2] No such file or directory: 'productos_embeddings.npy'
+Archivo productos_embeddings.npy no encontrado. Verifica si fue generado correctamente.
 Generando recomendaciones...
-Productos después de limpieza: 5120
+Productos antes de limpiar: 6184
+Productos tras limpiar duplicados y nulos: 5120
+Validación de `nombre_limpio`:
+0        yerba mate bajo polvo 4 flex mañanita 500 gr
+1             huevo de chocolate sorpresa kinder 20 gr
+2                             chocolate rocklets 40 gr
+3    galletitas chocolate con relleno de limon melb...
+4                galletitas obleas rellena opera 92 gr
+Name: nombre_limpio, dtype: object
 Embeddings no encontrados. Iniciando cálculo...
 Primeros productos para embeddings: 0        yerba mate bajo polvo 4 flex mañanita 500 gr
 1             huevo de chocolate sorpresa kinder 20 gr
